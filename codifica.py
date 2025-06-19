@@ -16,7 +16,7 @@ import calendar
 
 st.set_page_config(layout="wide")
 
-url_immagine = 'Scavolini_logo.png'
+url_immagine = 'https://github.com/MarcelloGalimberti/scavolini/blob/main/Scavolini_logo.png?raw=true'
 
 col_1, col_2 = st.columns([1, 5])
 
