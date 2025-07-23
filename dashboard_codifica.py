@@ -59,7 +59,7 @@ if df_ore_GMP['% GMP'].max() <= 1:
     df_ore_GMP['% GMP'] = df_ore_GMP['% GMP'] * 100
 
 # Ordina le opzioni (opzionale)
-df_ore_GMP = df_ore_GMP.sort_values('Op')
+df_ore_GMP = df_ore_GMP.sort_values('Op').reset_index(drop=True)
 
 # Prepara i dati per il radar (chiudi il poligono)
 categories = df_ore_GMP['Op'].tolist()
@@ -114,7 +114,8 @@ with col_2:
     st.plotly_chart(fig, use_container_width=True)
 
 
-st.write('#### Capacità totale del team in ore/giorno: ', capacity_team)
+#st.write('#### Capacità totale del team in ore/giorno: ', capacity_team)
+st.write(f'#### Capacità totale del team in ore/giorno: :green[{capacity_team:.1f}]')
 
 st.header('Database GMP assegnate e workload residuo (in giorni)', divider='red')
 
@@ -280,7 +281,7 @@ fig = px.bar(
     x='Classificazione',
     y='Conteggio',
     color='AZ',
-    title='Numero di GMP per Classificazione (colorato per Azienda)',
+    title='Numero di GMP per stratificato per Classificazione e colorato per Azienda',
     labels={'Classificazione': 'Classificazione', 'Conteggio': 'Numero GMP', 'AZ': 'Azienda'},
     height=700,
     color_discrete_map={
@@ -345,7 +346,7 @@ fig = px.bar(
     y='Tempo',
     color='AZ',
     custom_data=['Tooltip'],
-    title='Tempo per Classificazione (impilato per AZ)',
+    title='Tempo assegnato [ore] stratificato per Classificazione eimpilato per Azienda',
     labels={'Tempo': 'Tempo', 'Classificazione': 'Classificazione', 'AZ': 'Azienda'},
     height=700,
     color_discrete_map={
