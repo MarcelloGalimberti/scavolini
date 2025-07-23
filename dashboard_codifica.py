@@ -26,14 +26,136 @@ with col_1:
 with col_2:
     st.title('Dashboard GMP Ufficio Codifica')
 
+st.write('Note:')
+st.write('1. Dati relativi a GMP entrate dal 2023 in poi')
+st.write('2. GMP Elettrodomestici escluse')
+st.write('3. La % di completamento è presa dal Planner')
+
+
 ###### Caricamento del file Excel
 st.header('Caricamento database codifica', divider='red')
 uploaded_raw = st.file_uploader(
-    "Carica file Impegni ufficio",
-    #accept_multiple_files=True # caricarli tutti e poi selezionare 2026 (in un secondo momento, 2030 è diverso)
-)
+    "Carica file Impegni ufficio")
 if not uploaded_raw:
     st.stop()
+
+###### Caricamento del file Planner
+st.header('Caricamento Planner', divider='red')
+uploaded_planner = st.file_uploader(
+    "Carica file Planner")
+if not uploaded_planner:
+    st.stop()
+
+
+###### Caricamento file stato GMP
+st.header('Caricamento estrazione portale GMP', divider='red')
+uploaded_stato_gmp = st.file_uploader(
+    "Carica file Stato GMP")
+if not uploaded_stato_gmp:
+    st.stop()
+
+# st.write('### Anteprima del file Stato GMP caricato')
+df_GMP = pd.read_excel(uploaded_stato_gmp, parse_dates=True)
+
+#st.dataframe(df_GMP)
+
+def converti_colonne_data(df, colonne):
+    for col in colonne:
+        df[col] = pd.to_datetime(df[col], errors='coerce').dt.normalize()
+    return df
+
+colonne_date = ['Data_Chiusura_Richiesta', 'Data_Inizio_Lavorazione', 'Data_Chiusura',
+                'Scadenza_GMP']
+
+df_GMP = converti_colonne_data(df_GMP, colonne_date)
+
+
+# Filtro 
+# 1. Elimina le righe dove Numero_GMP inizia con "PMP"
+mask_numero = ~df_GMP["Numero_GMP"].astype(str).str.startswith("PMP")
+
+# 2. Elimina le righe dove Stato_GMP è "Annullata"
+mask_stato = df_GMP["Stato_GMP"] != "Annullata"
+
+# 3. Elimina le righe dove Tipo_GMP è "Elettrodomestico"
+mask_tipo = df_GMP["Tipo_GMP"] != "Elettrodomestico"
+
+# Applica tutte le condizioni insieme
+df_GMP = df_GMP[mask_numero & mask_stato & mask_tipo].reset_index(drop=True)
+
+# st.write('### Anteprima del file Stato GMP caricato dopo il filtro')
+# st.dataframe(df_GMP)
+
+df_filtrato = df_GMP[df_GMP["Data_Chiusura"].notnull()]
+
+pivot = df_filtrato.pivot_table(
+    index="Numero_GMP",
+    values="Data_Chiusura",
+    aggfunc="max"
+).reset_index()
+
+pivot = pivot.sort_values(by="Data_Chiusura", ascending=True).reset_index(drop=True)
+
+
+# Assumiamo che il dataframe 'pivot' abbia le colonne: Numero_GMP, Data_Chiusura (in formato datetime o date)
+# Se non sono datetime, converti:
+pivot["Data_Chiusura"] = pd.to_datetime(pivot["Data_Chiusura"], errors="coerce")
+
+# 1. Crea la colonna Mese-Anno
+pivot["Mese"] = pivot["Data_Chiusura"].dt.to_period("M").dt.to_timestamp()
+
+# 2. Calcola il numero di Numero_GMP per mese
+counts = pivot.groupby("Mese")["Numero_GMP"].count().reset_index(name="Numero GMP")
+
+# 3. Calcola le medie mobili
+counts["Media mobile 3 mesi"] = counts["Numero GMP"].rolling(window=3, min_periods=1).mean()
+counts["Media mobile 9 mesi"] = counts["Numero GMP"].rolling(window=9, min_periods=1).mean()
+
+# 4. Crea il diagramma Plotly
+fig_MA = go.Figure()
+
+fig_MA.add_trace(go.Scatter(
+    x=counts["Mese"], y=counts["Numero GMP"], 
+    mode='lines+markers', 
+    name='Numero GMP'
+))
+
+fig_MA.add_trace(go.Scatter(
+    x=counts["Mese"], y=counts["Media mobile 3 mesi"], 
+    mode='lines',
+    name='Media mobile 3 mesi'
+))
+
+fig_MA.add_trace(go.Scatter(
+    x=counts["Mese"], y=counts["Media mobile 9 mesi"], 
+    mode='lines',
+    name='Media mobile 9 mesi'
+))
+
+fig_MA.update_layout(
+    title="Numero di Numero_GMP chiusi per mese e media mobile",
+    xaxis_title="Mese",
+    yaxis_title="Numero GMP",
+    legend_title="Legenda"
+)
+
+# Layout con font grandi
+fig_MA.update_layout(
+    title="Numero_GMP chiusi per mese e media mobile",
+    title_font=dict(size=26),
+    xaxis_title="Mese",
+    yaxis_title="Numero GMP",
+    xaxis=dict(title_font=dict(size=20), tickfont=dict(size=16)),
+    yaxis=dict(title_font=dict(size=20), tickfont=dict(size=16)),
+    legend=dict(font=dict(size=18), title_font=dict(size=20)),
+    margin=dict(t=60, b=40, l=10, r=10),
+    height=700,
+)
+
+
+
+
+df_planner = pd.read_excel(uploaded_planner, skiprows=8, header=0, parse_dates=True)
 
 # Caricamento del file, specificando il nome del foglio e le righe da saltare
 df_raw = pd.read_excel(uploaded_raw, sheet_name='database', skiprows=[0], header=0, parse_dates=True)
@@ -45,6 +167,24 @@ df_raw = df_raw[['AZ','Argomento','G.M.P.',	'Tempo','Stato','Priorità','Brenda'
                  'Bravi','Puzzi','Ugoccioni','Arrivo Mdp','Avanzamento','Classificazione']]
 # Filtra per Stato != 'C'
 df_raw = df_raw[df_raw['Stato'] != 'C'].reset_index(drop=True)
+
+# Processing di df_raw per abbinare l'avanzamento da Planner
+def get_percent_complete(gmp, df_planner):
+    gmp_str = str(int(gmp))
+    filtro = df_planner["Nome"].astype(str).str.contains(gmp_str, na=False)
+    if filtro.any():
+        return df_planner.loc[filtro, "% di completamento"].iloc[0]
+    else:
+        return 0
+
+df_raw["Test"] = df_raw["G.M.P."].apply(lambda x: get_percent_complete(x, df_planner))
+
+
+# Aggiorna "Avanzamento" con il massimo tra "Avanzamento" e "Test"
+df_raw["Avanzamento"] = df_raw[["Avanzamento", "Test"]].max(axis=1)
+
+# Elimina la colonna "Test"
+df_raw = df_raw.drop(columns=["Test"])
 
 df_ore_GMP = pd.read_excel(uploaded_raw, sheet_name='ore_GMP')
 
@@ -98,8 +238,6 @@ fig.update_layout(
     height=800
 )
 
-# Visualizza in Streamlit
-#st.plotly_chart(fig, use_container_width=True)
 
 col_1, col_2 = st.columns([1, 1])
 
@@ -114,7 +252,6 @@ with col_2:
     st.plotly_chart(fig, use_container_width=True)
 
 
-#st.write('#### Capacità totale del team in ore/giorno: ', capacity_team)
 st.write(f'#### Capacità totale del team in ore/giorno: :green[{capacity_team:.1f}]')
 
 st.header('Database GMP assegnate e workload residuo (in giorni)', divider='red')
@@ -126,8 +263,6 @@ def to_excel_bytes(df):
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Foglio1') #index=False,
     return output.getvalue()
-
-# Sostituzione di ore/giorno con il valore corrispondente in df_raw
 
 # Crea un dizionario: Op -> ore/giorno
 op_to_hours = dict(zip(df_ore_GMP['Op'], df_ore_GMP['ore/giorno']))
@@ -147,6 +282,18 @@ for col in op_cols:
 # Database GMP assegnate
 df_A = df_raw[df_raw['Stato'] == 'A'].reset_index(drop=True)
 st.dataframe(df_A)
+
+tempo_residuo = (df_A["Tempo"] / df_A['numero_op_assegnati'] * (1-df_A["Avanzamento"])).sum()
+tempo_complessivo = df_A["Tempo"].sum()
+completamento_percentuale = tempo_residuo / tempo_complessivo * 100
+numero_GMP_assegnate = df_A.shape[0]
+GMP_residue_equivalenti = numero_GMP_assegnate*(1-completamento_percentuale/100)
+
+st.write(f'#### Numero di GMP assegnate: :green[{numero_GMP_assegnate}]')
+st.write(f'#### Tempo complessivo assegnato [ore]: :green[{tempo_complessivo:.1f}]')
+st.write(f'#### Completamento percentuale: :green[{completamento_percentuale:.1f}%]')
+st.write(f'#### Tempo residuo totale [ore]: :green[{tempo_residuo:.1f}]')
+#st.write(f'#### GMP residue equivalenti (in base al completamento): :green[{GMP_residue_equivalenti:.1f}]')
 
 # Pulsante per scaricare xlsx
 # Crea il bottone per scaricare il pivot ordinato
@@ -235,10 +382,10 @@ operatori_team = df_ore_GMP['Op'].tolist()
 giorni_residui = df_A[operatori_team].sum().sum()
 st.write(f'#### Giorni residui totali in processo di codifica: :green[{giorni_residui:.1f}]')
 
-num_operatori = (df_ore_GMP['ore/giorno'] > 0).sum()
-st.write(f'#### Operatori con ore/giorno > 0: :green[{num_operatori:.0f}]')
+num_operatori = (df_ore_GMP['ore/giorno'] > 1).sum() # modificare qui per ridurre il numero di operatori
+#st.write(f'#### Operatori con ore/giorno dedicate a GMP > 1: :green[{num_operatori:.0f}]')
 
-st.write(f'#### Tempo di attraversamento medio processo codifica (in giorni):  :green[{(giorni_residui / num_operatori):.1f}]') 
+st.write(f'#### Tempo di attraversamento medio processo codifica [giorni]:  :green[{(tempo_residuo / capacity_team):.1f}]') 
 
 
 st.header('Analisi del Backlog', divider='red')
@@ -346,7 +493,7 @@ fig = px.bar(
     y='Tempo',
     color='AZ',
     custom_data=['Tooltip'],
-    title='Tempo assegnato [ore] stratificato per Classificazione eimpilato per Azienda',
+    title='Tempo assegnato [ore] stratificato per Classificazione e impilato per Azienda',
     labels={'Tempo': 'Tempo', 'Classificazione': 'Classificazione', 'AZ': 'Azienda'},
     height=700,
     color_discrete_map={
@@ -405,12 +552,27 @@ st.plotly_chart(fig, use_container_width=True)
 
 
 tempo_totale_backlog = df_N['Tempo'].sum()
-st.write(f'#### Tempo totale in backlog (in ore di lavoro):  :green[{tempo_totale_backlog}]')
+st.write(f'#### Tempo totale in backlog [ore]:  :green[{tempo_totale_backlog}]')
 
 tempo_di_coda = df_N['Tempo'].sum() / capacity_team
-st.write(f'#### Tempo di coda del backlog (in giorni):  :green[{tempo_di_coda:.1f}]')
+st.write(f'#### Tempo di coda del backlog [giorni] = ore di backlog / capacità del Team:  :green[{tempo_di_coda:.1f}]')
 
-st.header('Summary tempi di coda e di processo [giorni lavorativi]', divider='red')
-st.write(f'#### Tempi di coda (backlog): :green[{tempo_di_coda:.1f}]', )
-st.write(f'#### Tempi di processo (in corso): :green[{(giorni_residui / num_operatori):.1f}]')
-st.write(f'#### Tempi totali di processo (backlog + in corso): :green[{(giorni_residui / num_operatori) + tempo_di_coda:.1f}]')
+st.header('Tempi di coda e di processo in base a workload e assegnazioni', divider='red')
+st.write(f'#### Tempi di coda (backlog) [giorni]: :green[{tempo_di_coda:.1f}]', )
+st.write(f'#### Tempi di processo (in corso) [giorni]: :green[{(tempo_residuo / capacity_team):.1f}]')
+st.write(f'#### Tempi totali di processo (backlog + in corso) [giorni]: :green[{(tempo_residuo / capacity_team) + tempo_di_coda:.1f}]')
+st.write(f'#### Tempi totali di processo (backlog + in corso) [mesi]: :green[{((tempo_residuo / capacity_team) + tempo_di_coda)/21:.1f}]')
+
+st.header('Andamento GMP chiuse per mese', divider='red')
+# 5. Visualizza in Streamlit
+st.plotly_chart(fig_MA, use_container_width=True)
+
+ma_3 = counts["Media mobile 3 mesi"].dropna().iloc[-1]
+st.write(f'#### Media mobile 3 mesi [GMP chiuse / mese]: :green[{ma_3:.1f}]')
+st.write(f'#### GMP residue equivalenti: :green[{GMP_residue_equivalenti:.1f}]')
+st.write(f'#### GMP in backlog: :green[{num_SC + num_EM}]')
+GMP_totali = GMP_residue_equivalenti + num_SC + num_EM
+st.write(f'#### Totale GMP in processo: :green[{GMP_totali:.1f}]')
+tempo_di_attraversamento_Little = (GMP_residue_equivalenti+num_SC + num_EM)/ma_3
+st.write(f'#### Tempo di attraversamento medio = Totale GMP / Media mobile 3 mesi : :green[{tempo_di_attraversamento_Little:.1f}] [mesi]')
+
