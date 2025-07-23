@@ -24,7 +24,7 @@ with col_1:
     st.image(url_immagine, width=200)
 
 with col_2:
-    st.title('Dashboard Ufficio Codifica')
+    st.title('Dashboard GMP Ufficio Codifica')
 
 ###### Caricamento del file Excel
 st.header('Caricamento database codifica', divider='red')
